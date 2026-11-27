@@ -25,7 +25,7 @@ Lleva tu uso de Claude y el estado de Claude Code a tu robot Latiddo (o a tu Lat
 - Al robot le llegan:
   - los porcentajes y las horas de reinicio;
   - el nombre del evento, el estado, el resumen de la sesión y la hora;
-  - en el «Listo» de un turno que no empezaste tú, `"quiet": true`: el robot lo muestra sin pitido (desde su firmware 0.6.13; uno anterior pita como siempre). Al Pulse no le llega;
+  - en el «Listo» de un turno que no empezaste tú, `"quiet": true`. Es solo información (y para el registro): el robot muestra «Listo» y pita como siempre. Al Pulse no le llega;
   - la versión del puente;
   - un resumen de 8 caracteres de tu ordenador, nunca su nombre.
 - Nunca tus prompts, tus archivos, las rutas ni lo que hacen las herramientas.
@@ -37,6 +37,8 @@ Lleva tu uso de Claude y el estado de Claude Code a tu robot Latiddo (o a tu Lat
 ```
 aviso sesión=77cb47b8 Stop -> done, turno: automático, «Listo» sin pitido
 ```
+
+En la 1.3.3, «Listo» sin pitido solo quiere decir que ese aviso llevaba `quiet`: el robot pita igual. Ese texto cambiará en la 1.4.
 
 Los `PostToolUse` repetidos de una sesión que ya está trabajando no se apuntan. Nunca apunta tus mensajes.
 
