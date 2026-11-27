@@ -1,6 +1,6 @@
 # Puente de Latiddo para Claude Code
 
-Lleva tu uso de Claude y el estado de Claude Code a tu robot Latiddo (o a tu Latiddo Pulse) por la red de tu casa. Versión 1.3.2, la misma que se descarga desde releases.latiddo.com.
+Lleva tu uso de Claude y el estado de Claude Code a tu robot Latiddo (o a tu Latiddo Pulse) por la red de tu casa. Versión 1.3.3, la misma que se descarga desde releases.latiddo.com.
 
 ## Qué hace
 
@@ -15,6 +15,7 @@ Lleva tu uso de Claude y el estado de Claude Code a tu robot Latiddo (o a tu Lat
 
 - La salida de texto de `claude -p /usage`: porcentajes y horas de reinicio.
 - De cada hook de Claude Code: el nombre del evento y el id de la sesión. El id lo convierte en un resumen corto y nunca lo envía tal cual.
+- De `UserPromptSubmit`, solo si el mensaje empieza por `<task-notification>`. Así sabe si el turno lo empezó Claude Code solo, por ejemplo con el aviso de una tarea en segundo plano. El mensaje nunca se guarda, se apunta ni se envía.
 - Si usas la barra de estado: los límites de uso que Claude Code le pasa.
 - Su configuración: `~/.claude/latiddo.json`.
 
@@ -24,9 +25,20 @@ Lleva tu uso de Claude y el estado de Claude Code a tu robot Latiddo (o a tu Lat
 - Al robot le llegan:
   - los porcentajes y las horas de reinicio;
   - el nombre del evento, el estado, el resumen de la sesión y la hora;
+  - en el «Listo» de un turno que no empezaste tú, `"quiet": true`: el robot lo muestra sin pitido (desde su firmware 0.6.13; uno anterior pita como siempre). Al Pulse no le llega;
   - la versión del puente;
   - un resumen de 8 caracteres de tu ordenador, nunca su nombre.
 - Nunca tus prompts, tus archivos, las rutas ni lo que hacen las herramientas.
+
+## Registro
+
+`~/.claude/latiddo.log` apunta cada aviso de Claude Code: el resumen de la sesión, el evento, el estado y si el turno lo empezaste tú. Por ejemplo:
+
+```
+aviso sesión=77cb47b8 Stop -> done, turno: automático, «Listo» sin pitido
+```
+
+Los `PostToolUse` repetidos de una sesión que ya está trabajando no se apuntan. Nunca apunta tus mensajes.
 
 ## Qué no hace
 

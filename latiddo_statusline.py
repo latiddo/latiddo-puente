@@ -57,7 +57,7 @@ from pathlib import Path
 # Version of the bridge (both scripts and the installers): the ONLY place where it is set.
 # Sent in every update so the Pulse can say when a newer one is published (it never updates
 # anything by itself); tools/make-release.py copies it to latest.json.
-BRIDGE_VERSION = "1.3.2"
+BRIDGE_VERSION = "1.3.3"
 SCRIPT_NAME = "latiddo_statusline.py"
 DEVICE_IDS = ("latiddo",)  # "device" in /api/status
 NET_TIMEOUT = 1.5          # seconds (status line, tests)
@@ -169,6 +169,10 @@ I18N_ES = {
     "no device configured (latiddo.json, LATIDDO_IP or LATIDDO_ROBOT); nothing sent": "ningún aparato configurado (latiddo.json, LATIDDO_IP o LATIDDO_ROBOT); no se envía",
     "(empty)": "(vacío)",
     "{who} does not take the Claude Code hooks ({state})": "{who} no recibe los avisos de Claude Code ({state})",
+    "hook session={sid} {event} -> {state}, turn: {turn}{extra}": "aviso sesión={sid} {event} -> {state}, turno: {turn}{extra}",
+    "yours": "tuyo",
+    "automatic": "automático",
+    ", «Listo» without a beep": ", «Listo» sin pitido",
     "no answer": "sin respuesta",
     "scheduled task": "tarea programada",
     "status line": "status line",
@@ -990,6 +994,9 @@ ROBOT_HOOK_PATH = "/api/claude-state"
 HOOK_RECORD_S = 30          # the last hook of each device for the settings page: at most every 30 s
 HOOK_LOG_REPEAT_S = 600     # a device that does not take the hooks: one log line in 10 min
 NO_HOOK_ENV = "LATIDDO_NO_HOOK"   # set by the /usage poller: its own `claude -p` runs send nothing
+# A UserPromptSubmit that Claude Code starts by itself, not a message of the user (1.3.3)
+AUTO_PROMPT_PREFIXES = ("<task-notification>",)
+TURN_END_EVENTS = ("Stop", "StopFailure", "SessionEnd")
 # The last state of each session (one small file per short session id) and the poller's resend to
 # the robot: a lost hook never leaves the robot with an old state. The same times as the robot's
 # and the Pulse's cc_core.h: a session with no news in 30 min is gone, "working" in 10 min stopped.
@@ -1054,21 +1061,56 @@ def cc_dir():
     return Path(tempfile.gettempdir()) / "latiddo_cc"
 
 
-def keep_cc_state(payload):
+def user_prompt(data):
+    """A UserPromptSubmit of a message the user wrote (True), or one Claude Code started by itself
+    (False): a background task's notice comes as a prompt that begins with <task-notification>
+    (seen with a test session, 1.3.3). Only the start of the prompt is looked at; it is never kept,
+    logged or sent."""
+    prompt = data.get("prompt") if isinstance(data, dict) else None
+    return not (isinstance(prompt, str) and prompt.lstrip().startswith(AUTO_PROMPT_PREFIXES))
+
+
+def keep_cc_state(payload, user=None):
     """The last state of the hook's session, for the poller's resend (a newer one is never
-    replaced by an older one: async hooks can finish out of order)."""
+    replaced by an older one: async hooks can finish out of order), and whether its turn was started
+    by a message of the user (user_turn, 1.3.3: set by UserPromptSubmit with `user`, cleared by Stop,
+    StopFailure and SessionEnd). Returns (the state kept before, the turn's user_turn before this
+    hook): (None, False) for a session not seen yet."""
+    before = (None, False)
     try:
         sid = str(payload["sid"])
         if not (len(sid) == 8 and all(c in "0123456789abcdef" for c in sid)):
-            return
+            return before
         path = cc_dir() / (sid + ".json")
         old = load_json(path, {})
-        if isinstance(old, dict) and int(old.get("ts", 0) or 0) > int(payload["ts"]):
-            return
+        if not isinstance(old, dict):
+            old = {}
+        before = (old.get("state"), old.get("user_turn") is True)
+        if int(old.get("ts", 0) or 0) > int(payload["ts"]):
+            return before
+        user_turn = before[1]
+        if payload["event"] == "UserPromptSubmit":
+            user_turn = bool(user)
+        elif payload["event"] in TURN_END_EVENTS:
+            user_turn = False
         path.parent.mkdir(parents=True, exist_ok=True)
-        save_json_atomic(path, {"state": payload["state"], "event": payload["event"], "ts": int(payload["ts"])})
+        save_json_atomic(path, {"state": payload["state"], "event": payload["event"], "ts": int(payload["ts"]),
+                                "user_turn": user_turn})
     except Exception:
         pass
+    return before
+
+
+def log_hook(payload, before_state, user_turn, quiet):
+    """The hook in latiddo.log (1.3.3): the session (its short id), the event, the state and whether
+    its turn began with a message of the user. The repeats of a working session (each tool of a
+    turn) are left out."""
+    if payload["event"] in ("PostToolUse", "PostToolUseFailure") and before_state == "working":
+        return
+    turn = t("yours") if user_turn else t("automatic")
+    extra = t(", «Listo» without a beep") if quiet else ""
+    log(t("hook session={sid} {event} -> {state}, turn: {turn}{extra}", sid=payload["sid"], event=payload["event"],
+          state=payload["state"], turn=turn, extra=extra))
 
 
 def bridge_src():
@@ -1262,10 +1304,21 @@ def run_hook():
     if os.environ.get(NO_HOOK_ENV):
         return
     raw = sys.stdin.buffer.read() if sys.stdin is not None else b""
-    payload = hook_payload(json.loads(raw.decode("utf-8", "replace") or "{}"), now_ms)
+    data = json.loads(raw.decode("utf-8", "replace") or "{}")
+    payload = hook_payload(data, now_ms)
     if payload is None:
         return
-    keep_cc_state(payload)
+    user = user_prompt(data) if payload["event"] == "UserPromptSubmit" else None
+    before_state, user_turn = keep_cc_state(payload, user)
+    if payload["event"] == "UserPromptSubmit":
+        user_turn = user
+    # «Listo» with its beep only after a message of the user since the last Stop (1.3.3): the turns
+    # Claude Code starts by itself (a background task's notice) end in a quiet «Listo», for the
+    # robot only (from 0.6.13; an older robot ignores the field and beeps as before)
+    quiet = payload["event"] == "Stop" and not user_turn
+    log_hook(payload, before_state, user_turn, quiet)
+    if quiet:
+        payload["quiet"] = True
     send_hooks(hook_targets(), payload)
 
 
@@ -1318,8 +1371,10 @@ def send_hooks(targets, payload, record=True, full=False):
             results[d["id"]] = send_hook_robot(address, robot_payload, robot_budget, d["path"])
         else:
             # the Pulse too, whatever its firmware (one before 3.18.0 ignores src): a session it
-            # gets with src is always one that this PC's snapshot can end
-            pulse_payload = payload if "src" in payload else dict(payload, src=bridge_src())
+            # gets with src is always one that this PC's snapshot can end. «quiet» is the robot's
+            # only (the Pulse has no beep)
+            pulse_payload = {k: v for k, v in payload.items() if k != "quiet"}
+            pulse_payload.setdefault("src", bridge_src())
             results[d["id"]] = send_hook(address, d["password"], pulse_payload, path=d["path"])
     threads = [threading.Thread(target=work, args=(d,), daemon=True) for d in targets]
     for th in threads:
